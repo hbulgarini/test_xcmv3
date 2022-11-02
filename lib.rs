@@ -60,14 +60,11 @@ impl Environment for CustomEnvironment {
 #[ink::contract(env = crate::CustomEnvironment)]
 mod xcm_playground {
     pub use xcm::opaque::latest::prelude::{
-        Junction, Junctions::X1, MultiLocation,
+        Junction, Junctions, MultiLocation,
         Transact, Xcm, OriginKind
     };
     //pub use xcm::opaque::latest::prelude::*;
-    pub use xcm::{VersionedMultiAsset, VersionedMultiLocation, VersionedResponse, VersionedXcm};
-    use ink::{
-        prelude::vec::Vec,
-    };
+    pub use xcm::{VersionedMultiAsset, VersionedMultiLocation, VersionedResponse, VersionedXcm, v3::{WeightLimit,Fungibility,AssetId,Parent,WildMultiAsset,MultiAsset,MultiAssets,MultiAssetFilter,Instruction::{DepositReserveAsset,InitiateReserveWithdraw,BuyExecution,DepositAsset,WithdrawAsset}}};
 
     /// Defines the storage of your contract.
     /// Add new fields to the below struct in order
@@ -94,23 +91,70 @@ mod xcm_playground {
         }
 
         #[ink(message)]
-        pub fn send_message(&mut self, paraId: u32, call: Vec<u8>, weight: u64) {
-            let multi_location = VersionedMultiLocation::V3(MultiLocation {
+        pub fn send_message(&mut self, account: [u8; 32]) {
+            let para_1000 = Junctions::X1(Junction::Parachain(1000));
+            let para_3000 = Junctions::X1(Junction::Parachain(3000));
+            let account_dest = Junctions::X1(Junction::AccountId32 { network: None, id: account });
+            let reserved_asset = Junctions::X3(Junction::Parachain(1000), Junction::PalletInstance(50), Junction::GeneralIndex(1));
+            let buy_execution_asset = Junctions::X2(Junction::PalletInstance(50), Junction::GeneralIndex(1));
+
+            let reserve =MultiLocation {
                 parents: 1,
-                interior: X1(Junction::Parachain(paraId)),
-            });
-            let versioned_xcm = VersionedXcm::from(Xcm([Transact {
-                origin_kind: OriginKind::Native,
-                require_weight_at_most: weight as u64,
-                call: call.into()
-            }]
-            .to_vec()));
+                interior: para_1000,
+            };
+            let dest = MultiLocation {
+                parents: 1,
+                interior: para_3000,
+            };
+            let beneficiary = MultiLocation {
+                parents: 0,
+                interior: account_dest,
+            };
+            let reserved_location = MultiLocation {
+                parents: 1,
+                interior: reserved_asset,
+            };
+
+            let buy_asset_location = MultiLocation {
+                parents: 0,
+                interior: buy_execution_asset,
+            };
+            
+
+
+            let fees = MultiAsset {
+                id: AssetId::Concrete(buy_asset_location),
+                fun: Fungibility::Fungible(1000000000000_u128)
+            };
+            let assets = MultiAssetFilter::Wild(WildMultiAsset::All);
+            let mut multi_assets = MultiAssets::new();
+            multi_assets.push(
+                MultiAsset {
+                    id: AssetId::Concrete(reserved_location),
+                    fun: Fungibility::Fungible(5000000000000_u128)
+                }
+            );
+            let xcm = Xcm([
+                WithdrawAsset(multi_assets),
+                InitiateReserveWithdraw {
+                    assets: assets.clone(),
+                    reserve,
+                    xcm: Xcm([
+                        BuyExecution { fees, weight_limit: WeightLimit::Unlimited},
+                        DepositReserveAsset {
+                            assets: assets.clone(),
+                            dest,
+                            xcm: Xcm([DepositAsset { assets: MultiAssetFilter::Wild(WildMultiAsset::All), beneficiary } ].into())
+                        }
+                    ].to_vec())
+                }].to_vec());
+            let versioned_xcm = VersionedXcm::from(xcm);
 
             self
                 .env()
                 .extension()
-                .prepare_send(multi_location, versioned_xcm);
-            self.env().extension().send();
+                .prepare_execute(versioned_xcm);
+            self.env().extension().execute();
         }
     }
 
